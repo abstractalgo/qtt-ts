@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { checkProject } from '../src/check.ts';
-import type { LinearDiagnostic } from '../src/check.ts';
+import type { QttDiagnostic } from '../src/check.ts';
 import { expected } from './expected.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -12,7 +12,7 @@ const fixturesDir = join(root, 'fixtures');
 const fixtures = readdirSync(fixturesDir).filter((f) => f.endsWith('.ts'));
 
 describe('fixtures', () => {
-  let diagnostics: LinearDiagnostic[] = [];
+  let diagnostics: QttDiagnostic[] = [];
 
   beforeAll(() => {
     diagnostics = checkProject({

@@ -1,11 +1,12 @@
-# linear-check
+# qtt-check
 
-A linear-ownership checker for TypeScript: values typed `Linear<T>` must be consumed exactly once.
-It is a standalone CLI built on the TypeScript 7.1 beta compiler API (`typescript/sync`).
+A quantitative ownership checker for TypeScript: values typed `Quantity<T, N>` must be consumed exactly `N` times,
+and `Linear<T>`, which is `Quantity<T, 1>`, exactly once. It is a standalone CLI built on the TypeScript 7.1 beta
+compiler API (`typescript/sync`).
 [`SPEC.md`](./SPEC.md) defines the semantics and [`fixtures/`](./fixtures) is the executable spec.
 
 ```ts
-import type { Linear } from 'linear-check';
+import type { Linear } from 'qtt-check';
 
 type Token = Linear<{ readonly id: string }>;
 
@@ -14,11 +15,29 @@ spend(t);
 spend(t); // use-after-move
 ```
 
+With a grade above 1, each call that passes the value consumes as many uses as the parameter's grade: one for a plain
+or `Linear` parameter, `k` for a `Quantity<…, k>` one. Returning, storing or assigning the value moves it whole, which
+needs every use still left, and `void t` drops whatever is left.
+
+```ts
+import type { Quantity } from 'qtt-check';
+
+type Ticket = Quantity<{ readonly id: string }, 3>;
+
+declare function punch(t: { readonly id: string }): void; // one use
+declare function punchTwice(t: Quantity<{ readonly id: string }, 2>): void; // two uses
+
+const ticket = issue();
+punch(ticket);
+punchTwice(ticket); // three uses in all: done
+punch(ticket); // use-after-move: a fourth use
+```
+
 `Borrow<T>` marks a parameter that reads a linear value without taking ownership (like `&T` in Rust), and linear
 values inside tuples, objects and arrays stay tracked:
 
 ```ts
-import type { Borrow } from 'linear-check';
+import type { Borrow } from 'qtt-check';
 
 declare function describe(t: Borrow<Token>): string;
 
@@ -31,7 +50,7 @@ spend(pair[1]); // pair is now consumed, part by part
 ## Usage
 
 ```sh
-linear-check [-p path/to/tsconfig.json] [files...]
+qtt-check [-p path/to/tsconfig.json] [files...]
 ```
 
 - With `-p`, the program comes from that tsconfig. Without it, `./tsconfig.json` is used if it exists.
@@ -40,23 +59,23 @@ linear-check [-p path/to/tsconfig.json] [files...]
 - Output is one `path:line:col  code  message` line per diagnostic, then a summary line.
   The exit code is 1 when there are diagnostics and 2 on usage or internal errors.
 
-From the package: `node src/cli.ts -p ../../apps/linear-check-demo/tsconfig.json`. The code runs directly on
+From the package: `node src/cli.ts -p ../../apps/qtt-check-demo/tsconfig.json`. The code runs directly on
 Node 24+ with type stripping; there is no build step.
 
 ## In the editor, through oxlint
 
 TypeScript 7's language server can't load plugins: `compilerOptions.plugins` is parsed but ignored. To get these
-diagnostics in the editor anyway, `linear-check/oxlint-plugin` runs the same analysis as an oxlint JS
-plugin, so the oxc extension's language server shows them. Its rules are `linear-check/use-after-move`,
-`linear-check/not-consumed`, `linear-check/captured`, `linear-check/overwritten`, `linear-check/discarded`,
-`linear-check/move-out-of-index` and `linear-check/moved-borrow`.
+diagnostics in the editor anyway, `qtt-check/oxlint-plugin` runs the same analysis as an oxlint JS
+plugin, so the oxc extension's language server shows them. Its rules are `qtt-check/use-after-move`,
+`qtt-check/not-consumed`, `qtt-check/captured`, `qtt-check/overwritten`, `qtt-check/discarded`,
+`qtt-check/move-out-of-index` and `qtt-check/moved-borrow`.
 
 ```ts
 // oxlint.config.ts (nested, next to the code to check)
 export default defineConfig({
-  extends: [rootConfig], // see apps/linear-check-demo/oxlint.config.ts
-  jsPlugins: ['linear-check/oxlint-plugin'],
-  rules: { 'linear-check/use-after-move': 'error' /* … */ },
+  extends: [rootConfig], // see apps/qtt-check-demo/oxlint.config.ts
+  jsPlugins: ['qtt-check/oxlint-plugin'],
+  rules: { 'qtt-check/use-after-move': 'error' /* … */ },
 });
 ```
 
@@ -67,14 +86,14 @@ How it works:
   from oxlint, so unsaved edits are checked; every other file is read from disk.
 - If the beta API process crashes, the plugin reports nothing for that file and starts a fresh process for the next.
 
-Verified with `oxlint --lsp`: an unsaved second capture in `apps/linear-check-demo/src/main.ts` was reported as an
+Verified with `oxlint --lsp`: an unsaved second capture in `apps/qtt-check-demo/src/main.ts` was reported as an
 error 126 ms after the file was opened. Unsaved edits to _other_ files aren't seen until they're saved, and
 `tsconfig.json` changes need an oxc server restart (parsed configs are cached).
 
 After changing this package's code, restart the oxc server too (**Oxc: Restart Server**). The language server keeps
 the JS plugin it loaded for its whole lifetime. If a config enables a rule that the loaded copy doesn't have yet,
-oxlint skips the entire config, so no `linear-check` diagnostics appear at all. The **Output → Oxc (Lint)** panel
-then shows `Rule '…' not found in plugin 'linear-check'`.
+oxlint skips the entire config, so no `qtt-check` diagnostics appear at all. The **Output → Oxc (Lint)** panel
+then shows `Rule '…' not found in plugin 'qtt-check'`.
 
 Programmatic use: `checkProject({ cwd, project, files })` from `src/check.ts`, or `checkProgram(api, program, fileNames)`
 if you already hold a `Program`.
@@ -82,8 +101,8 @@ if you already hold a `Program`.
 ## Design
 
 **Linearity detection** is type-based. The checker finds this package's `src/index.ts` in the program (by real path,
-or as `node_modules/linear-check/src/index.ts`), locates the `[linearBrand]` and `[borrowBrand]` property
-signatures in it, and takes those symbols' escaped names (`__@linearBrand@<id>`). The id makes each name unique to its
+or as `node_modules/qtt-check/src/index.ts`), locates the `[quantityBrand]` and `[borrowBrand]` property
+signatures in it, and takes those symbols' escaped names (`__@quantityBrand@<id>`). The id makes each name unique to its
 declaration within the program, so a type carries a brand when `getPropertiesOfType` returns a property with that
 name. If the brand file isn't in the program, nothing can be linear and the analysis returns immediately.
 
@@ -91,7 +110,9 @@ A type is linear if it carries the linear brand, or if any union member, base co
 or number index type is linear. So tuples, objects with linear fields and arrays of linear values are linear
 containers, while `Promise<Token>` (whose properties are methods) is not. A type carrying the borrow brand is never
 linear. The checker explores the type graph breadth first, one batch of queries per level, and then propagates
-linearity backwards from branded types, which handles recursive types. Three cuts keep the graph small:
+linearity backwards from branded types, which handles recursive types. A branded type's grade is read from its brand
+property: the property's type has one numeric key, the `N` of `Quantity<T, N>`, which costs two more batched queries
+per level that finds brands. Three cuts keep the graph small:
 
 - Interfaces and classes declared only in lib or `node_modules` files can't mention the brand, so they aren't
   expanded. Instantiations of generic ones (`Array<Token>`, `ZodObject<…>`) are expanded only when one of their type
@@ -106,26 +127,33 @@ linearity backwards from branded types, which handles recursive types. Three cut
 right-hand sides of assignments to names that turn out to be linear. Their types come back through
 `api.batch(checker.getTypeAtLocation.gen(nodes))` in chunks of 4,000, and property lists are fetched the same way,
 cached by type id. Calls whose receiver or arguments mention a linear or borrowed binding by name have their signatures
-resolved in one batch: a linear `this` parameter makes a method call a move, and a parameter type carrying the borrow
-brand makes the argument a borrow. Element accesses on those bindings are typed in a batch too, to recognise moves of
+resolved in one batch: a linear `this` parameter makes a method call consume as many uses as its grade, a parameter
+type carrying the borrow brand makes the argument a borrow, and any other parameter type's grade (1 if it isn't linear)
+is what passing the argument consumes. Element accesses on those bindings are typed in a batch too, to recognise moves of
 linear elements by index.
 
 **The dataflow analysis** is an abstract interpreter over the AST rather than an explicit CFG. Each function body,
 arrow, method, class field initializer and the module top level is a separate unit. The state maps each _place_ to
-`owned`, `maybe-moved` or `moved`. A place is a linear binding, or a binding followed by property names or literal
+the range `lo..hi` of how many of its uses have been consumed on the paths reaching that point; each place has a
+grade, its type's `N`, and the counts are capped at it. For a linear place this is owned (`0..0`), moved (`1..1`) or
+maybe moved (`0..1`). A place is a linear binding, or a binding followed by property names or literal
 indices that each lead to a linear part of its type (`pair[0]`, `held.first.inner`). The binding itself is in the state
-while it's in scope; a place under it is added when it's moved, and otherwise has its parent's state. Joins compare
-these effective states, so a container moved whole on one path and part by part on the other is moved on both, and
-turn disagreement into `maybe-moved`. Statements return the outgoing
+while it's in scope; a place under it is added when it's consumed. A place inside a fully consumed one counts as fully
+consumed, and one inside a partly or maybe consumed one as possibly used up. Joins merge these effective ranges, so a
+container moved whole on one path and part by part on the other is moved on both. Statements return the outgoing
 state, or `null` when control can't fall through. `return`, `throw`, `break` and `continue` are dispatched through a
 stack of frames: loop and switch frames collect break and continue states; catch frames collect the join of every
 state seen in the `try` block (recorded at entry and after every move or assignment); finally frames hold pending
 exits, run the `finally` block once per kind of exit and then re-dispatch it. Leaving a scope by any route other than
-`throw` reports bindings that aren't `moved`. Loops iterate until the head state stops changing. Diagnostics are keyed
-by position and code, and the state only climbs the lattice, so repeated iterations can't produce stale reports.
+`throw` reports bindings whose `lo` is below their grade. Loops iterate until the head state stops changing; a place
+whose `hi` grows along the back edge is widened to its grade, since the loop could consume it on any number of
+iterations, so a `Quantity<T, 500>` needs no more iterations than a `Linear<T>`. Diagnostics are keyed by position and
+code, and the state only climbs the lattice, so repeated iterations can't produce stale reports.
 
-Places determine what each use touches. Moving a place moves everything under it. A move or a whole-value borrow
-(a call argument, a method call receiver) conflicts with a moved place at, above or below it, while reading through a
+Places determine what each use touches. Moving a place moves everything under it. A use that costs `k` (0 for a
+borrow) conflicts with the place itself when `hi + k` exceeds its grade (for a borrow, when `hi` reaches it). A move,
+consume or whole-value borrow (a call argument, a method call receiver) also conflicts with a consumed place above or
+below it, while reading through a
 part (`pair[0].id`, `held.label`) conflicts only with the place and those above it, so a sibling's move doesn't
 matter. A container binding is consumed when it was moved whole or each of its linear parts is consumed, recursively,
 and it's reported as `not-consumed` at its declaration otherwise. Destructuring moves the named linear parts into the

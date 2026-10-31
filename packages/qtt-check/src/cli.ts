@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util';
 
 import { checkProject } from './check.ts';
 
-const USAGE = 'usage: linear-check [-p path/to/tsconfig.json] [files...]\n';
+const USAGE = 'usage: qtt-check [-p path/to/tsconfig.json] [files...]\n';
 
 function main(): number {
   const { values, positionals } = parseArgs({
@@ -26,7 +26,7 @@ function main(): number {
   }
   if (!project && positionals.length === 0) {
     process.stderr.write(
-      `linear-check: no tsconfig.json found and no files given\n${USAGE}`,
+      `qtt-check: no tsconfig.json found and no files given\n${USAGE}`,
     );
     return 2;
   }
@@ -53,7 +53,7 @@ try {
   process.exitCode = main();
 } catch (error) {
   process.stderr.write(
-    `linear-check: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+    `qtt-check: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
   );
   process.exitCode = 2;
 }

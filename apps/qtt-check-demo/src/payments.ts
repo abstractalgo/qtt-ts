@@ -1,4 +1,4 @@
-import type { Borrow, Linear } from 'linear-check';
+import type { Borrow, Linear, Quantity } from 'qtt-check';
 
 export interface Authorization {
   readonly id: string;
@@ -10,12 +10,22 @@ export interface Authorization {
 // captured or voided, exactly once: never both, never twice, never forgotten.
 export type HeldFunds = Linear<Authorization>;
 
+// An order shipped in parts holds the whole amount up front, and each shipment
+// settles its share: captured when it ships, released when it's cancelled.
+// With N shipments, the authorization must be settled exactly N times.
+export type SplitFunds<N extends number> = Quantity<Authorization, N>;
+
 // Passing a linear value as an argument moves it, so the session's
 // operations are methods: calling a method borrows the session instead.
 export interface GatewaySession {
   readonly merchantId: string;
   ping(): void;
   authorize(amount: number, currency: string): HeldFunds;
+  authorizeSplit<N extends number>(
+    amount: number,
+    currency: string,
+    shipments: N,
+  ): SplitFunds<N>;
   close(this: Linear<GatewaySession>): void;
 }
 
@@ -30,6 +40,13 @@ export function openSession(merchantId: string): Linear<GatewaySession> {
     authorize(amount, currency) {
       const id = `auth_${nextId++}`;
       console.log(`[${merchantId}] authorized ${id}: ${amount} ${currency}`);
+      return { id, amount, currency };
+    },
+    authorizeSplit(amount, currency, shipments) {
+      const id = `auth_${nextId++}`;
+      console.log(
+        `[${merchantId}] authorized ${id}: ${amount} ${currency} over ${shipments} shipments`,
+      );
       return { id, amount, currency };
     },
     close() {
@@ -61,4 +78,14 @@ export function captureOrVoid(auth: HeldFunds, inStock: boolean): void {
 // capture or void it.
 export function describeHold(auth: Borrow<HeldFunds>): string {
   return `${auth.id}: ${auth.amount} ${auth.currency}`;
+}
+
+// Each shipment settles one use of a split authorization: the parameter is a
+// plain Authorization, so passing SplitFunds<N> consumes one of its N uses.
+export function captureShipment(auth: Authorization, amount: number): void {
+  console.log(`captured ${amount} ${auth.currency} of ${auth.id}`);
+}
+
+export function cancelShipment(auth: Authorization, amount: number): void {
+  console.log(`released ${amount} ${auth.currency} of ${auth.id}`);
 }

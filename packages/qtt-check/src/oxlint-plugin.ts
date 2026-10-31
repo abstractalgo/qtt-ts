@@ -5,7 +5,7 @@ import { API } from 'typescript/sync';
 import type { ParsedCommandLine } from 'typescript/sync';
 
 import { checkProgram } from './check.ts';
-import type { LinearCode, LinearDiagnostic } from './check.ts';
+import type { QttCode, QttDiagnostic } from './check.ts';
 
 // Runs the type-aware analysis inside oxlint, so its diagnostics reach the editor through
 // the oxc extension's language server. Each oxlint process keeps one TypeScript API
@@ -69,7 +69,7 @@ function nearestTsconfig(fileName: string): string | undefined {
   }
 }
 
-function check(fileName: string, text: string): LinearDiagnostic[] {
+function check(fileName: string, text: string): QttDiagnostic[] {
   const tsconfig = nearestTsconfig(fileName);
   if (!tsconfig) {
     return [];
@@ -89,10 +89,10 @@ function check(fileName: string, text: string): LinearDiagnostic[] {
 }
 
 // Every rule asks for the same file's diagnostics; the analysis runs once per AST.
-const cache = new WeakMap<object, LinearDiagnostic[]>();
+const cache = new WeakMap<object, QttDiagnostic[]>();
 let warned = false;
 
-function diagnostics(context: RuleContext): LinearDiagnostic[] {
+function diagnostics(context: RuleContext): QttDiagnostic[] {
   const { ast, text } = context.sourceCode;
   let result = cache.get(ast);
   if (!result) {
@@ -105,7 +105,7 @@ function diagnostics(context: RuleContext): LinearDiagnostic[] {
       if (!warned) {
         warned = true;
         process.stderr.write(
-          `linear-check: ${error instanceof Error ? error.message : String(error)}\n`,
+          `qtt-check: ${error instanceof Error ? error.message : String(error)}\n`,
         );
       }
       result = [];
@@ -115,7 +115,7 @@ function diagnostics(context: RuleContext): LinearDiagnostic[] {
   return result;
 }
 
-function rule(code: LinearCode, description: string): Rule {
+function rule(code: QttCode, description: string): Rule {
   return {
     meta: { type: 'problem', docs: { description } },
     create(context) {
@@ -140,7 +140,7 @@ function rule(code: LinearCode, description: string): Rule {
 }
 
 const plugin = {
-  meta: { name: 'linear-check', version: '0.0.0' },
+  meta: { name: 'qtt-check', version: '0.0.0' },
   rules: {
     'use-after-move': rule(
       'use-after-move',

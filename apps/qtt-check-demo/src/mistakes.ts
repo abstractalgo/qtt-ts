@@ -1,7 +1,12 @@
 // Intentional mistakes, one per diagnostic. Never run: main.ts doesn't import
 // this file. Both checkers should flag each marked line.
-import { capture, openSession, voidAuthorization } from './payments.ts';
-import type { GatewaySession, HeldFunds } from './payments.ts';
+import {
+  capture,
+  captureShipment,
+  openSession,
+  voidAuthorization,
+} from './payments.ts';
+import type { GatewaySession, HeldFunds, SplitFunds } from './payments.ts';
 
 declare const session: GatewaySession;
 
@@ -105,4 +110,29 @@ export function checkStuff3(): void {
   capture(a.bla); // error: use-after-move
   capture(a.ble);
   capture(a.ble); // error: use-after-move
+}
+
+export function shipmentNeverSettled(): void {
+  const order = session.authorizeSplit(60, 'EUR', 2); // error: not-consumed
+  captureShipment(order, 30);
+}
+
+export function settledOnceTooOften(): void {
+  const order = session.authorizeSplit(60, 'EUR', 2);
+  captureShipment(order, 30);
+  captureShipment(order, 30);
+  captureShipment(order, 30); // error: use-after-move
+}
+
+export function handedOffAfterFirstShipment(): SplitFunds<2> {
+  const order = session.authorizeSplit(60, 'EUR', 2);
+  captureShipment(order, 30);
+  return order; // error: use-after-move
+}
+
+export function shipmentsInALoop(shipments: number): void {
+  const order = session.authorizeSplit(60, 'EUR', 2); // error: not-consumed
+  for (let i = 0; i < shipments; i++) {
+    captureShipment(order, 60 / shipments); // error: use-after-move
+  }
 }

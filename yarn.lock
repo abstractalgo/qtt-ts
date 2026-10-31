@@ -1059,41 +1059,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"linear-check-demo@workspace:apps/linear-check-demo":
-  version: 0.0.0-use.local
-  resolution: "linear-check-demo@workspace:apps/linear-check-demo"
-  dependencies:
-    "@types/node": "npm:^24.10.1"
-    linear-check: "workspace:*"
-    oxlint: "npm:^1.85.0"
-    typescript: "npm:7.0.2"
-  languageName: unknown
-  linkType: soft
-
-"linear-check@workspace:*, linear-check@workspace:packages/linear-check":
-  version: 0.0.0-use.local
-  resolution: "linear-check@workspace:packages/linear-check"
-  dependencies:
-    "@types/node": "npm:^24.10.1"
-    oxlint: "npm:^1.85.0"
-    typescript: "npm:7.1.0-beta"
-    vitest: "npm:^4.1.11"
-  bin:
-    linear-check: ./src/cli.ts
-  languageName: unknown
-  linkType: soft
-
-"linear-ts@workspace:.":
-  version: 0.0.0-use.local
-  resolution: "linear-ts@workspace:."
-  dependencies:
-    "@types/node": "npm:^24.10.1"
-    oxfmt: "npm:^0.70.0"
-    oxlint: "npm:^1.85.0"
-    typescript: "npm:7.0.2"
-  languageName: unknown
-  linkType: soft
-
 "magic-string@npm:^0.30.21":
   version: 0.30.21
   resolution: "magic-string@npm:0.30.21"
@@ -1357,6 +1322,41 @@ __metadata:
   checksum: 10c0/b89c2d862604f35fec795477b0c7e376feab3ba0d4f4d291c4e959567442697cf451ac557d0623c1cc38af45a78128b983410f397a10c5d3a67f76c33de4754b
   languageName: node
   linkType: hard
+
+"qtt-check-demo@workspace:apps/qtt-check-demo":
+  version: 0.0.0-use.local
+  resolution: "qtt-check-demo@workspace:apps/qtt-check-demo"
+  dependencies:
+    "@types/node": "npm:^24.10.1"
+    oxlint: "npm:^1.85.0"
+    qtt-check: "workspace:*"
+    typescript: "npm:7.0.2"
+  languageName: unknown
+  linkType: soft
+
+"qtt-check@workspace:*, qtt-check@workspace:packages/qtt-check":
+  version: 0.0.0-use.local
+  resolution: "qtt-check@workspace:packages/qtt-check"
+  dependencies:
+    "@types/node": "npm:^24.10.1"
+    oxlint: "npm:^1.85.0"
+    typescript: "npm:7.1.0-beta"
+    vitest: "npm:^4.1.11"
+  bin:
+    qtt-check: ./src/cli.ts
+  languageName: unknown
+  linkType: soft
+
+"qtt-ts@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "qtt-ts@workspace:."
+  dependencies:
+    "@types/node": "npm:^24.10.1"
+    oxfmt: "npm:^0.70.0"
+    oxlint: "npm:^1.85.0"
+    typescript: "npm:7.0.2"
+  languageName: unknown
+  linkType: soft
 
 "rolldown@npm:~1.2.14":
   version: 1.2.15

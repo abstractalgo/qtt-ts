@@ -39,7 +39,7 @@ describe('oxlint plugin', () => {
       .filter((d) => join(root, d.filename) === join(fixturesDir, name))
       .map(
         (d) =>
-          `${d.labels[0]?.span.line} ${d.code.replace(/^linear-check\((.*)\)$/, '$1')}`,
+          `${d.labels[0]?.span.line} ${d.code.replace(/^qtt-check\((.*)\)$/, '$1')}`,
       )
       .toSorted();
     expect(actual).toEqual(expected(join(fixturesDir, name)));

@@ -1,17 +1,17 @@
 {
-  "name": "linear-check-demo",
+  "name": "qtt-check-demo",
   "version": "0.0.0",
   "private": true,
-  "description": "Demo of linear-check, the standalone TS 7.1 API checker",
+  "description": "Demo of qtt-check, the standalone TS 7.1 API checker for linear and quantitative types",
   "type": "module",
   "scripts": {
     "start": "node src/main.ts",
-    "check:linear": "linear-check -p tsconfig.json",
-    "lint:linear": "oxlint src",
+    "check:qtt": "qtt-check -p tsconfig.json",
+    "lint:qtt": "oxlint src",
     "ts": "tsc --version && tsc --noEmit"
   },
   "dependencies": {
-    "linear-check": "workspace:*"
+    "qtt-check": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

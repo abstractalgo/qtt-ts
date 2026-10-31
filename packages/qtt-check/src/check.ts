@@ -56,7 +56,7 @@ import type {
   TypeReference,
 } from 'typescript/sync';
 
-export type LinearCode =
+export type QttCode =
   | 'use-after-move'
   | 'not-consumed'
   | 'captured'
@@ -65,13 +65,13 @@ export type LinearCode =
   | 'move-out-of-index'
   | 'moved-borrow';
 
-export interface LinearDiagnostic {
+export interface QttDiagnostic {
   readonly file: string;
   readonly line: number;
   readonly column: number;
   readonly endLine: number;
   readonly endColumn: number;
-  readonly code: LinearCode;
+  readonly code: QttCode;
   readonly message: string;
 }
 
@@ -84,7 +84,7 @@ export interface CheckOptions {
 }
 
 export interface CheckResult {
-  readonly diagnostics: LinearDiagnostic[];
+  readonly diagnostics: QttDiagnostic[];
   readonly filesChecked: number;
   readonly programFiles: number;
 }
@@ -140,15 +140,15 @@ function isAnalysable(fileName: string): boolean {
 const OWN_BRAND_FILE = realpathSync(
   fileURLToPath(new URL('./index.ts', import.meta.url)),
 );
-const PUBLISHED_BRAND_FILE = /\/node_modules\/linear-check\/src\/index\.ts$/;
-const PUBLISHED_PACKAGE = /\/node_modules\/linear-check\//;
+const PUBLISHED_BRAND_FILE = /\/node_modules\/qtt-check\/src\/index\.ts$/;
+const PUBLISHED_PACKAGE = /\/node_modules\/qtt-check\//;
 
 interface BrandNames {
   readonly linear: Set<string>;
   readonly borrow: Set<string>;
 }
 
-/** Returns the escaped property names of this package's `linearBrand` and `borrowBrand`, or none when no file in the program imports them. */
+/** Returns the escaped property names of this package's `quantityBrand` and `borrowBrand`, or none when no file in the program imports them. */
 function findBrandNames(
   api: API,
   program: Program,
@@ -177,8 +177,8 @@ function findBrandNames(
             expr.kind === SyntaxKind.Identifier
               ? (expr as Identifier).text
               : '';
-          if (text === 'linearBrand' || text === 'borrowBrand') {
-            const set = text === 'linearBrand' ? names.linear : names.borrow;
+          if (text === 'quantityBrand' || text === 'borrowBrand') {
+            const set = text === 'quantityBrand' ? names.linear : names.borrow;
             set.add(checker.getSymbolOfDeclaration(node as never).escapedName);
           }
         }
@@ -204,6 +204,8 @@ function samePath(a: string, b: string): boolean {
 interface TypeInfo {
   readonly kind: 'object' | 'union' | 'instantiable';
   brand: 'linear' | 'borrow' | undefined;
+  /** For a type carrying the quantity brand, how many times a value must be consumed. */
+  grade: number;
   readonly children: number[];
   /** Non-method property names of an object type, with their types. */
   readonly props: Map<string, number>;
@@ -222,6 +224,7 @@ class LinearTypes {
   private readonly linear = new Set<number>();
   private readonly parents = new Map<number, number[]>();
   private readonly borrowCache = new Map<number, boolean>();
+  private readonly gradeCache = new Map<number, number>();
   private readonly partsCache = new Map<
     number,
     ReadonlyMap<string, number> | undefined
@@ -298,6 +301,62 @@ class LinearTypes {
     }
     this.partsCache.set(id, parts);
     return parts;
+  }
+
+  /**
+   * How many times a value of this type must be consumed: the quantity brand's count, the largest
+   * among linear union members and constraints, and 1 for containers and non-linear types. Only
+   * valid after exploring the type.
+   */
+  gradeOf(id: number | undefined): number {
+    if (id === undefined) {
+      return 1;
+    }
+    let grade = this.gradeCache.get(id);
+    if (grade === undefined) {
+      this.gradeCache.set(id, 1);
+      const info = this.info.get(id);
+      grade = 1;
+      if (info?.brand === 'linear') {
+        grade = info.grade;
+      } else if (info && info.kind !== 'object') {
+        const linearChildren = info.children.filter((c) => this.linear.has(c));
+        if (linearChildren.length > 0) {
+          grade = Math.max(...linearChildren.map((c) => this.gradeOf(c)));
+        }
+      }
+      this.gradeCache.set(id, grade);
+    }
+    return grade;
+  }
+
+  /**
+   * Reads each brand property's count. Its type is `Uses & { readonly '3'?: true }`, so the count
+   * is the numeric property name; with several (`Quantity<Quantity<T, 2>, 3>`), the largest wins.
+   */
+  private readGrades(
+    symbols: readonly TsSymbol[],
+    owners: readonly TypeInfo[],
+  ): void {
+    for (let start = 0; start < symbols.length; start += CHUNK) {
+      const slice = symbols.slice(start, start + CHUNK);
+      const types = this.api.batch(this.checker.getTypeOfSymbol.gen(slice))[0];
+      // The property is optional, so its type includes `undefined`.
+      const payloads = this.api.batch(
+        ...types.map((t) => this.checker.getNonNullableType.gen(t)),
+      );
+      const props = this.api.batch(
+        ...payloads.map((t) => this.checker.getPropertiesOfType.gen(t)),
+      );
+      slice.forEach((_, i) => {
+        const counts = (props[i] ?? [])
+          .filter((p) => /^\d+$/.test(p.name))
+          .map((p) => Number(p.name));
+        if (counts.length > 0) {
+          (owners[start + i] as TypeInfo).grade = Math.max(...counts);
+        }
+      });
+    }
   }
 
   /**
@@ -421,6 +480,7 @@ class LinearTypes {
         this.info.set(type.id, {
           kind: kind ?? 'object',
           brand: undefined,
+          grade: 1,
           children: [],
           props: new Map(),
         });
@@ -451,6 +511,8 @@ class LinearTypes {
         ) as unknown[];
         const symbols: TsSymbol[] = [];
         const owners: number[] = [];
+        const brandSymbols: TsSymbol[] = [];
+        const brandOwners: TypeInfo[] = [];
         chunk.forEach((t, i) => {
           const info = this.info.get(t.id) as TypeInfo;
           const props =
@@ -458,11 +520,12 @@ class LinearTypes {
           for (const p of props) {
             if (this.brands.borrow.has(p.escapedName)) {
               info.brand = 'borrow';
-            } else if (
-              this.brands.linear.has(p.escapedName) &&
-              info.brand === undefined
-            ) {
-              info.brand = 'linear';
+            } else if (this.brands.linear.has(p.escapedName)) {
+              if (info.brand === undefined) {
+                info.brand = 'linear';
+                brandSymbols.push(p);
+                brandOwners.push(info);
+              }
             } else if (!(p.flags & SymbolFlags.Method)) {
               symbols.push(p);
               owners.push(t.id);
@@ -470,6 +533,7 @@ class LinearTypes {
           }
           link(t.id, results[2 * i + 1] as Type | undefined, true);
         });
+        this.readGrades(brandSymbols, brandOwners);
         for (let start = 0; start < symbols.length; start += CHUNK) {
           const slice = symbols.slice(start, start + CHUNK);
           const propTypes = this.api.batch(
@@ -571,8 +635,10 @@ interface Facts {
   readonly linearElements: Set<Node>;
   /** Call arguments passed to a `Borrow<…>` parameter. */
   readonly borrowArgs: Set<Node>;
-  /** Method calls on tracked receivers whose signature declares a linear `this`. */
-  readonly consumingCalls: Set<Node>;
+  /** Call arguments with a resolved parameter, with the parameter type's grade: how many uses passing them consumes. */
+  readonly argCosts: Map<Node, number>;
+  /** Method calls on tracked receivers whose signature declares a linear `this`, with that type's grade. */
+  readonly consumingCalls: Map<Node, number>;
   readonly typesFor: LinearTypes;
 }
 
@@ -580,7 +646,7 @@ export function checkProgram(
   api: API,
   program: Program,
   fileNames: readonly string[],
-): LinearDiagnostic[] {
+): QttDiagnostic[] {
   const checker = program.getProject().checker;
   const brands = findBrandNames(api, program, checker);
   // Nothing in the program can be linear if the brand isn't part of it.
@@ -676,7 +742,7 @@ export function checkProgram(
       }
     });
 
-  const { borrowArgs, consumingCalls } = analyzeCalls(
+  const { borrowArgs, argCosts, consumingCalls } = analyzeCalls(
     api,
     checker,
     typesFor,
@@ -692,10 +758,11 @@ export function checkProgram(
     discarded,
     linearElements,
     borrowArgs,
+    argCosts,
     consumingCalls,
     typesFor,
   };
-  const diagnostics: LinearDiagnostic[] = [];
+  const diagnostics: QttDiagnostic[] = [];
   for (const file of files) {
     diagnostics.push(...analyzeFile(file, facts));
   }
@@ -704,16 +771,21 @@ export function checkProgram(
 
 type CallLike = CallExpression | NewExpression;
 
-/** Resolves the signatures of calls that involve tracked bindings, to find borrowed arguments and consuming methods. */
+/** Resolves the signatures of calls that involve tracked bindings, to find what each argument and receiver use costs. */
 function analyzeCalls(
   api: API,
   checker: Checker,
   typesFor: LinearTypes,
   allCalls: readonly CallLike[],
   tracked: (node: Node) => boolean,
-): { borrowArgs: Set<Node>; consumingCalls: Set<Node> } {
+): {
+  borrowArgs: Set<Node>;
+  argCosts: Map<Node, number>;
+  consumingCalls: Map<Node, number>;
+} {
   const borrowArgs = new Set<Node>();
-  const consumingCalls = new Set<Node>();
+  const argCosts = new Map<Node, number>();
+  const consumingCalls = new Map<Node, number>();
   const receiverOf = (call: CallLike): Node | undefined => {
     const callee = skipParens(call.expression);
     return call.kind === SyntaxKind.CallExpression &&
@@ -778,7 +850,10 @@ function analyzeCalls(
   }
   typesFor.areLinear(thisTypes).forEach((linear, i) => {
     if (linear) {
-      consumingCalls.add(thisCalls[i] as Node);
+      consumingCalls.set(
+        thisCalls[i] as Node,
+        typesFor.gradeOf((thisTypes[i] as Type).id),
+      );
     }
   });
 
@@ -792,11 +867,15 @@ function analyzeCalls(
   }
   typesFor.areLinear(paramTypes);
   paramTypes.forEach((type, i) => {
+    const arg = (params[i] as { arg: Node }).arg;
     if (typesFor.isBorrow(type.id)) {
-      borrowArgs.add((params[i] as { arg: Node }).arg);
+      borrowArgs.add(arg);
+    } else {
+      // A parameter that isn't linear (`unknown`, a plain interface) takes one use.
+      argCosts.set(arg, typesFor.gradeOf(type.id));
     }
   });
-  return { borrowArgs, consumingCalls };
+  return { borrowArgs, argCosts, consumingCalls };
 }
 
 function batchTypes(
@@ -963,18 +1042,44 @@ function skipParens(node: Node): Node {
 // Dataflow
 // ---------------------------------------------------------------------------
 
-const OWNED = 0;
-const MAYBE = 1;
-const MOVED = 2;
-type Ownership = typeof OWNED | typeof MAYBE | typeof MOVED;
 /**
- * Ownership per place. A binding is present while it's in scope. Places under it (`pair[0]`,
- * `held.first`) are present only once they've been moved or joined; an absent one has its
- * nearest present ancestor's state.
+ * How many times a place has been consumed, as the range over the paths reaching a point. A
+ * linear value (grade 1) is owned at [0, 0], moved at [1, 1] and maybe moved at [0, 1].
  */
-type State = Map<Place, Ownership>;
-/** `borrow` reads the whole place; `read` reads through it to a non-linear part, so moved siblings don't matter. */
-type Use = 'move' | 'borrow' | 'read';
+interface Count {
+  readonly lo: number;
+  readonly hi: number;
+}
+
+const UNUSED: Count = { lo: 0, hi: 0 };
+
+function count(lo: number, hi = lo): Count {
+  return lo === 0 && hi === 0 ? UNUSED : { lo, hi };
+}
+
+/** Whether every path reaching this point consumed the place fully. */
+function isConsumed(c: Count, grade: number): boolean {
+  return c.lo >= grade;
+}
+
+/**
+ * Consumption per place. A binding is present while it's in scope. Places under it (`pair[0]`,
+ * `held.first`) are present only once they've been consumed or joined; an absent one is unused.
+ */
+type State = Map<Place, Count>;
+/**
+ * `borrow` reads the whole place; `read` reads through it to a non-linear part, so moved siblings
+ * don't matter. `move` takes the whole value, all its uses at once; a number consumes that many
+ * uses (passing to a parameter whose type has that grade); `drop` (`void t`) gives up whatever is
+ * left.
+ */
+type Use = 'move' | 'borrow' | 'read' | 'drop' | number;
+
+function consumes(use: Use): boolean {
+  return (
+    use === 'move' || use === 'drop' || (typeof use === 'number' && use > 0)
+  );
+}
 
 /** A binding, or a binding followed by fixed property names or tuple indices. */
 interface Place {
@@ -982,6 +1087,8 @@ interface Place {
   readonly label: string;
   /** Type id, for finding the linear parts. */
   readonly type: number | undefined;
+  /** How many times the place's value must be consumed. */
+  readonly grade: number;
   readonly children: Map<string, Place>;
 }
 
@@ -1009,7 +1116,7 @@ function isWithin(p: Place, ancestor: Place): boolean {
   return false;
 }
 
-function childPlace(p: Place, key: string, type: number): Place {
+function childPlace(p: Place, key: string, type: number, grade: number): Place {
   let c = p.children.get(key);
   if (!c) {
     const label = /^\d+$/.test(key)
@@ -1017,22 +1124,69 @@ function childPlace(p: Place, key: string, type: number): Place {
       : /^[A-Za-z_$][\w$]*$/.test(key)
         ? `${p.label}.${key}`
         : `${p.label}[${JSON.stringify(key)}]`;
-    c = { parent: p, label, type, children: new Map() };
+    c = { parent: p, label, type, grade, children: new Map() };
     p.children.set(key, c);
   }
   return c;
 }
 
-/** A place's state, taking moves of the places containing it into account. */
-function effective(s: State, p: Place): Ownership {
-  let v: Ownership = OWNED;
-  for (let q: Place | undefined = p; q; q = q.parent) {
-    const e = s.get(q);
-    if (e !== undefined && e > v) {
-      v = e;
+/**
+ * A place's count, taking the places containing it into account: inside a fully consumed one it's
+ * fully consumed, and inside one that may have been (or was partly) consumed it may be too.
+ */
+function effective(s: State, p: Place): Count {
+  const own = s.get(p) ?? UNUSED;
+  let hi = own.hi;
+  for (let q = p.parent; q; q = q.parent) {
+    const c = s.get(q);
+    if (c && isConsumed(c, q.grade)) {
+      return count(p.grade);
+    }
+    if (c && c.hi > 0) {
+      hi = p.grade;
     }
   }
-  return v;
+  return count(own.lo, hi);
+}
+
+function times(n: number): string {
+  return n === 1 ? 'once' : `${n} times`;
+}
+
+function range(c: Count): string {
+  return c.lo === c.hi ? times(c.lo) : `${c.lo} to ${c.hi} times`;
+}
+
+/** Why a use that needs `cost` uses of `p` (all of them for a whole move) doesn't fit in what's left of it. */
+function overuseMessage(
+  p: Place,
+  own: Count,
+  cost: number,
+  whole: boolean,
+): string {
+  const g = p.grade;
+  if (cost === 0 || (g === 1 && cost === 1)) {
+    const surely = isConsumed(own, g);
+    const moved =
+      g === 1
+        ? surely
+          ? 'was moved'
+          : 'may have been moved'
+        : surely
+          ? `was consumed ${times(g)}`
+          : `may have been consumed ${times(g)}`;
+    return `'${p.label}' is used after it ${moved}`;
+  }
+  if (own.hi === 0) {
+    return `'${p.label}' can only be consumed ${times(g)}, but this use consumes it ${times(cost)}`;
+  }
+  const earlier =
+    own.lo + cost > g
+      ? `it was already consumed ${range(own)}`
+      : `it may already have been consumed ${range(own)}`;
+  return whole
+    ? `'${p.label}' is moved whole, but ${earlier}`
+    : `'${p.label}' can only be consumed ${times(g)}: ${earlier}, and this use consumes it ${times(cost)} more`;
 }
 
 function deleteWithin(s: State, p: Place): void {
@@ -1101,18 +1255,18 @@ function joinTwo(a: State, b: State): State {
   const out: State = new Map();
   for (const p of new Set([...a.keys(), ...b.keys()])) {
     const root = rootOf(p);
-    let v: Ownership | undefined;
+    let v: Count | undefined;
     if (!a.has(root)) {
       v = b.get(p);
     } else if (!b.has(root)) {
       v = a.get(p);
     } else {
-      // Compare effective states, so a part moved on one path and its container moved whole on
+      // Compare effective counts, so a part moved on one path and its container moved whole on
       // the other counts as moved on both.
       const va = effective(a, p);
       const vb = effective(b, p);
-      v = va === vb ? va : MAYBE;
-      if (v === OWNED && p !== root) {
+      v = count(Math.min(va.lo, vb.lo), Math.max(va.hi, vb.hi));
+      if (v === UNUSED && p !== root) {
         continue;
       }
     }
@@ -1131,11 +1285,26 @@ function sameState(a: State | null, b: State | null): boolean {
     return false;
   }
   for (const [k, v] of a) {
-    if (b.get(k) !== v) {
+    const w = b.get(k);
+    if (!w || w.lo !== v.lo || w.hi !== v.hi) {
       return false;
     }
   }
   return true;
+}
+
+/**
+ * Loop widening: a place consumed more by the back edge than at the loop head can be consumed
+ * again on every further iteration, so it may be used up. Linear places reach their grade in one
+ * step anyway; this keeps graded ones from needing one iteration per use.
+ */
+function widen(head: State, next: State): State {
+  const out: State = new Map();
+  for (const [p, c] of next) {
+    const before = head.get(p) ?? UNUSED;
+    out.set(p, c.hi > before.hi ? count(c.lo, p.grade) : c);
+  }
+  return out;
 }
 
 const FUNCTION_KINDS = new Set<SyntaxKind>([
@@ -1163,13 +1332,13 @@ interface Unit {
   readonly outer: readonly Scope[];
 }
 
-function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
-  const reported = new Map<string, LinearDiagnostic>();
+function analyzeFile(file: SourceFile, facts: Facts): QttDiagnostic[] {
+  const reported = new Map<string, QttDiagnostic>();
   const bindings = new Map<Node, Binding>();
   const queue: Unit[] = [{ node: file, outer: [] }];
   const queued = new Set<Node>([file]);
 
-  const report = (node: Node, code: LinearCode, message: string): void => {
+  const report = (node: Node, code: QttCode, message: string): void => {
     const start = node.getStart(file);
     const key = `${start}:${code}`;
     if (reported.has(key)) {
@@ -1199,6 +1368,7 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
         parent: undefined,
         label: name.text,
         type: facts.bindingTypes.get(name),
+        grade: facts.typesFor.gradeOf(facts.bindingTypes.get(name)),
         children: new Map(),
       };
       bindings.set(name, b);
@@ -1209,31 +1379,59 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
   const partType = (p: Place, key: string): number | undefined =>
     facts.typesFor.partsOf(p.type)?.get(key);
 
-  /** How far a place is consumed: moved whole, or each of its linear parts consumed. */
+  const part = (p: Place, key: string, type: number): Place =>
+    childPlace(p, key, type, facts.typesFor.gradeOf(type));
+
+  /**
+   * How far a place is consumed: `consumed` once it's been consumed as many times as its grade on
+   * every path, or each of its linear parts is; `partial` when only some parts or uses are, the
+   * same on every path; `maybe` when paths disagree; `unused` when it hasn't been touched.
+   */
   const consumption = (
     s: State,
     p: Place,
-    inherited: Ownership = OWNED,
-  ): Ownership | 'partial' => {
-    const own = s.get(p);
-    const e: Ownership = own !== undefined && own > inherited ? own : inherited;
-    if (e === MOVED) {
-      return MOVED;
+    inherited: 'none' | 'maybe' = 'none',
+  ): 'consumed' | 'unused' | 'partial' | 'maybe' => {
+    const own = s.get(p) ?? UNUSED;
+    if (isConsumed(own, p.grade)) {
+      return 'consumed';
     }
+    const e = own.hi > 0 || inherited === 'maybe' ? 'maybe' : 'unused';
     const parts = facts.typesFor.partsOf(p.type);
     if (!parts) {
-      return e;
+      return e === 'maybe' && inherited === 'none' && own.lo === own.hi
+        ? 'partial'
+        : e;
     }
     const levels = [...parts].map(([key, type]) =>
-      consumption(s, childPlace(p, key, type), e),
+      consumption(s, part(p, key, type), e === 'maybe' ? 'maybe' : 'none'),
     );
-    if (levels.every((l) => l === MOVED)) {
-      return MOVED;
+    if (levels.every((l) => l === 'consumed')) {
+      return 'consumed';
     }
-    if (e === OWNED && levels.some((l) => l !== OWNED)) {
-      return levels.some((l) => l === MAYBE) ? MAYBE : 'partial';
+    if (e === 'unused' && levels.some((l) => l !== 'unused')) {
+      return levels.some((l) => l === 'maybe') ? 'maybe' : 'partial';
     }
     return e;
+  };
+
+  const notConsumedMessage = (
+    s: State,
+    b: Binding,
+    st: 'unused' | 'partial' | 'maybe',
+  ): string => {
+    const c = s.get(b) ?? UNUSED;
+    if (st === 'partial' && c.hi === 0) {
+      return `'${b.name}' goes out of scope with parts that aren't consumed`;
+    }
+    if (b.grade === 1 || facts.typesFor.partsOf(b.type)) {
+      return st === 'unused'
+        ? `'${b.name}' goes out of scope without being consumed`
+        : `'${b.name}' is not consumed on every path`;
+    }
+    return st === 'unused'
+      ? `'${b.name}' goes out of scope without being consumed (it must be consumed ${times(b.grade)})`
+      : `'${b.name}' must be consumed ${times(b.grade)}, but is consumed ${range(c)}`;
   };
 
   const enqueue = (node: Node, outer: readonly Scope[]): void => {
@@ -1301,17 +1499,9 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
           if (!out.has(b)) {
             continue;
           }
-          const st = check ? consumption(out, b) : MOVED;
-          if (st !== MOVED) {
-            report(
-              b.decl,
-              'not-consumed',
-              st === OWNED
-                ? `'${b.name}' goes out of scope without being consumed`
-                : st === 'partial'
-                  ? `'${b.name}' goes out of scope with parts that aren't consumed`
-                  : `'${b.name}' is not consumed on every path`,
-            );
+          const st = check ? consumption(out, b) : 'consumed';
+          if (st !== 'consumed') {
+            report(b.decl, 'not-consumed', notConsumedMessage(out, b, st));
           }
           for (const p of out.keys()) {
             if (rootOf(p) === b) {
@@ -1380,11 +1570,16 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
 
     // --- references -------------------------------------------------------
 
-    /** Reports a use of a place that conflicts with an earlier move, then applies the use. */
+    /**
+     * Reports a use of a place that conflicts with earlier consumption, then applies the use. A use
+     * conflicts when the place doesn't have enough uses left for it (none for a borrow), when a place
+     * containing it may have been consumed, or, unless it only reads through to a non-linear part,
+     * when a place under it may have been.
+     */
     const applyUse = (p: Place, at: Node, s: State, use: Use): void => {
       const b = rootOf(p);
       if (b.borrow) {
-        if (use === 'move') {
+        if (consumes(use)) {
           report(
             at,
             'moved-borrow',
@@ -1396,36 +1591,58 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
       if (!b.linear || !s.has(b)) {
         return;
       }
-      let worst: Ownership = OWNED;
-      let culprit: Place = p;
-      for (let q: Place | undefined = p; q; q = q.parent) {
-        const v = s.get(q) ?? OWNED;
-        if (v > worst) {
-          worst = v;
-          culprit = q;
-        }
+      const cost = use === 'move' ? p.grade : typeof use === 'number' ? use : 0;
+      const own = s.get(p) ?? UNUSED;
+      let message: string | undefined;
+      if (
+        cost === 0 ? p.grade > 0 && own.hi >= p.grade : own.hi + cost > p.grade
+      ) {
+        message = overuseMessage(p, own, cost, use === 'move');
       }
-      if (use !== 'read') {
-        for (const [q, v] of s) {
-          if (v > worst && q !== p && isWithin(q, p)) {
-            worst = v;
-            culprit = q;
+      // Otherwise blame a containing place, or for whole-value uses a place under it: one that
+      // was consumed outright if any, else the nearest.
+      if (!message) {
+        const suspects: Place[] = [];
+        for (let q = p.parent; q; q = q.parent) {
+          suspects.push(q);
+        }
+        if (use !== 'read') {
+          for (const q of s.keys()) {
+            if (q !== p && isWithin(q, p)) {
+              suspects.push(q);
+            }
           }
         }
+        const touched = suspects.filter((q) => (s.get(q)?.hi ?? 0) > 0);
+        const culprit =
+          touched.find((q) => isConsumed(s.get(q) as Count, q.grade)) ??
+          touched[0];
+        if (culprit) {
+          const c = s.get(culprit) as Count;
+          const moved = isConsumed(c, culprit.grade)
+            ? 'was moved'
+            : c.lo > 0
+              ? 'was partly consumed'
+              : 'may have been moved';
+          message = `'${p.label}' is used after '${culprit.label}' ${moved}`;
+        }
       }
-      if (worst !== OWNED) {
-        const moved = worst === MOVED ? 'was moved' : 'may have been moved';
-        report(
-          at,
-          'use-after-move',
-          culprit === p
-            ? `'${p.label}' is used after it ${moved}`
-            : `'${p.label}' is used after '${culprit.label}' ${moved}`,
-        );
+      if (message) {
+        report(at, 'use-after-move', message);
       }
-      if (use === 'move') {
+      if (consumes(use)) {
+        const before = effective(s, p);
         deleteWithin(s, p);
-        s.set(p, MOVED);
+        // After an error the place counts as used up, so one mistake doesn't cascade.
+        s.set(
+          p,
+          message || use === 'drop'
+            ? count(p.grade)
+            : count(
+                Math.min(before.lo + cost, p.grade),
+                Math.min(before.hi + cost, p.grade),
+              ),
+        );
         noteThrowPoint(s);
       }
     };
@@ -1474,7 +1691,7 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
         if (key === undefined || type === undefined) {
           break;
         }
-        place = childPlace(place, key, type);
+        place = part(place, key, type);
         at = step;
       }
       return { place, node: at, rest: steps.slice(i) };
@@ -1495,7 +1712,7 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
       if (!first) {
         applyUse(acc.place, acc.node, s, use);
       } else if (
-        use === 'move' &&
+        consumes(use) &&
         acc.rest.length === 1 &&
         facts.linearElements.has(first)
       ) {
@@ -1526,7 +1743,7 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
       if (!b?.linear || !s.has(b)) {
         return;
       }
-      if (consumption(s, b) !== MOVED) {
+      if (consumption(s, b) !== 'consumed') {
         report(
           at,
           'overwritten',
@@ -1534,17 +1751,20 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
         );
       }
       deleteWithin(s, b);
-      s.set(b, value && facts.nonLinearValues.has(value) ? MOVED : OWNED);
+      s.set(
+        b,
+        value && facts.nonLinearValues.has(value) ? count(b.grade) : UNUSED,
+      );
       noteThrowPoint(s);
     };
 
     /** `held.first = mint()`: re-initializes a moved part of a container that is otherwise intact. */
     const assignPart = (p: Place, at: Node, s: State): void => {
-      if (p.parent && effective(s, p.parent) !== OWNED) {
+      if (p.parent && effective(s, p.parent).hi > 0) {
         applyUse(p.parent, at, s, 'read');
         return;
       }
-      if (consumption(s, p) !== MOVED) {
+      if (consumption(s, p) !== 'consumed') {
         report(
           at,
           'overwritten',
@@ -1552,7 +1772,7 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
         );
       }
       deleteWithin(s, p);
-      s.set(p, OWNED);
+      s.set(p, UNUSED);
       noteThrowPoint(s);
     };
 
@@ -1643,6 +1863,9 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
             );
           }
           return;
+        case SyntaxKind.VoidExpression:
+          expr((node as Node & { expression: Node }).expression, s, 'drop');
+          return;
         case SyntaxKind.TypeOfExpression:
         case SyntaxKind.DeleteExpression:
           expr((node as Node & { expression: Node }).expression, s, 'borrow');
@@ -1692,7 +1915,13 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
 
     const args = (list: readonly Node[], s: State): void => {
       for (const arg of list) {
-        expr(arg, s, facts.borrowArgs.has(arg) ? 'borrow' : 'move');
+        expr(
+          arg,
+          s,
+          facts.borrowArgs.has(arg)
+            ? 'borrow'
+            : (facts.argCosts.get(arg) ?? 'move'),
+        );
       }
     };
 
@@ -1705,7 +1934,7 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
       ) {
         const receiver = (callee as PropertyAccessExpression).expression;
         const receiverId = skipParens(receiver);
-        const use = facts.consumingCalls.has(node) ? 'move' : 'borrow';
+        const use = facts.consumingCalls.get(node) ?? 'borrow';
         if (receiverId.kind !== SyntaxKind.Identifier) {
           handled = accessUse(receiver, s, use);
         } else if (resolve((receiverId as Identifier).text)) {
@@ -1813,11 +2042,11 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
     ): Place | undefined => {
       const type = key === undefined ? undefined : partType(from, key);
       if (key !== undefined && type !== undefined) {
-        const part = childPlace(from, key, type);
+        const named = part(from, key, type);
         if (target.kind === SyntaxKind.Identifier) {
-          applyUse(part, at, s, 'move');
+          applyUse(named, at, s, 'move');
         }
-        return part;
+        return named;
       }
       if (bindsLinear) {
         report(
@@ -1848,7 +2077,7 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
       for (const [key, type] of parts) {
         const index = /^\d+$/.test(key) ? Number(key) : -1;
         if (!named.has(key) && (minIndex < 0 ? index < 0 : index >= minIndex)) {
-          applyUse(childPlace(from, key, type), at, s, 'move');
+          applyUse(part(from, key, type), at, s, 'move');
         }
       }
     };
@@ -2024,7 +2253,7 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
       if (name.kind === SyntaxKind.Identifier) {
         const b = declareBinding(name);
         if (b.linear) {
-          s.set(b, hasValue ? OWNED : MOVED);
+          s.set(b, hasValue ? UNUSED : count(b.grade));
         }
         return;
       }
@@ -2221,7 +2450,8 @@ function analyzeFile(file: SourceFile, facts: Facts): LinearDiagnostic[] {
           exit ? leaveScopes(exit, opts.depth, true) : null,
           ...frame.breaks,
         );
-        const next = join(entry, end);
+        const joined = join(entry, end);
+        const next = joined && widen(head, joined);
         if (sameState(next, head)) {
           break;
         }

@@ -1,6 +1,8 @@
 // Correct usage: both checkers report nothing for this file.
 import {
+  cancelShipment,
   captureOrVoid,
+  captureShipment,
   describeHold,
   openSession,
   voidAuthorization,
@@ -30,5 +32,12 @@ const basket = [
 ] as const;
 captureOrVoid(basket[0], true);
 captureOrVoid(basket[1], false);
+
+// An order in three shipments: SplitFunds<3>, inferred from the literal 3.
+// Each shipment settles one use, so there must be exactly three settlements.
+const order = session.authorizeSplit(90, 'EUR', 3);
+captureShipment(order, 30);
+captureShipment(order, 30);
+cancelShipment(order, 30);
 
 session.close();

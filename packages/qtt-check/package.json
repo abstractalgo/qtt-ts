@@ -1,8 +1,8 @@
 {
-  "name": "linear-check",
+  "name": "qtt-check",
   "version": "0.0.0",
   "private": true,
-  "description": "Linear ownership checker for TypeScript, built on the TypeScript 7.1 API",
+  "description": "Quantitative (and linear) ownership checker for TypeScript, built on the TypeScript 7.1 API",
   "bin": "./src/cli.ts",
   "type": "module",
   "exports": {

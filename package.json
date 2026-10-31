@@ -1,8 +1,8 @@
 {
-  "name": "linear-ts",
+  "name": "qtt-ts",
   "version": "0.0.0",
   "private": true,
-  "description": "Linear ownership types for TypeScript: a type-aware checker, its oxlint plugin and a demo app",
+  "description": "Quantitative and linear ownership types for TypeScript: a type-aware checker, its oxlint plugin and a demo app",
   "workspaces": [
     "apps/*",
     "packages/*"
