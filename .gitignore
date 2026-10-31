@@ -1,0 +1,10 @@
+node_modules
+.DS_Store
+
+# Yarn without zero-installs: keep the release, ignore caches and state
+.yarn/*
+!.yarn/releases
+.pnp.*
+
+# vitest
+.vite

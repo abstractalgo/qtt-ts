@@ -1,0 +1,21 @@
+{
+  "name": "linear-check-demo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Demo of linear-check, the standalone TS 7.1 API checker",
+  "type": "module",
+  "scripts": {
+    "start": "node src/main.ts",
+    "check:linear": "linear-check -p tsconfig.json",
+    "lint:linear": "oxlint src",
+    "ts": "tsc --version && tsc --noEmit"
+  },
+  "dependencies": {
+    "linear-check": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "oxlint": "^1.85.0",
+    "typescript": "7.0.2"
+  }
+}

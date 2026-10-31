@@ -1,0 +1,25 @@
+{
+  "name": "linear-check",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Linear ownership checker for TypeScript, built on the TypeScript 7.1 API",
+  "bin": "./src/cli.ts",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./oxlint-plugin": "./src/oxlint-plugin.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test:unit": "vitest run",
+    "ts": "tsc --version && tsc --noEmit"
+  },
+  "dependencies": {
+    "typescript": "7.1.0-beta"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "oxlint": "^1.85.0",
+    "vitest": "^4.1.11"
+  }
+}

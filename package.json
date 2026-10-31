@@ -1,0 +1,28 @@
+{
+  "name": "linear-ts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Linear ownership types for TypeScript: a type-aware checker, its oxlint plugin and a demo app",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "test:unit": "yarn workspaces foreach --all --topological run test:unit",
+    "ts": "yarn workspaces foreach --all --topological run ts",
+    "lint": "oxlint --quiet --disable-nested-config",
+    "lint:fix": "oxlint --quiet --disable-nested-config --fix",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "oxfmt": "^0.70.0",
+    "oxlint": "^1.85.0",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

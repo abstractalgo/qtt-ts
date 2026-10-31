@@ -1,0 +1,28 @@
+{
+  "include": ["src", "test", "fixtures"],
+  "compilerOptions": {
+    // type checking
+    "strict": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noUncheckedIndexedAccess": true,
+
+    // modules: run directly by Node, with type stripping
+    "module": "nodenext",
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+
+    // emit
+    "noEmit": true,
+
+    // language & env
+    "target": "esnext",
+    "lib": ["esnext"],
+    "types": ["node"],
+
+    // completeness
+    "skipLibCheck": true
+  }
+}
